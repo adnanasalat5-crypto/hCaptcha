@@ -1,74 +1,75 @@
+const express = require('express');
 const cors = require('cors');
+const fs = require('fs');
+const path = require('path');
+
 const app = express();
-
-// Video aur Canvas captchas ka data bara hota hai, is liye limit 50mb rakhi hai
 app.use(cors());
-app.use(express.json({ limit: '50mb' })); 
+app.use(express.json({ limit: '50mb' }));
 
-// Memory Storage (Sirf hCaptcha ke liye)
-let hcaptchaPending = {};
-let hcaptchaTrained = {};
+// 🚀 RAILWAY VOLUME SETUP (For Permanent Data Save)
+const DATA_DIR = process.env.RAILWAY_VOLUME_MOUNT_PATH || __dirname;
+const MEMORY_FILE = path.join(DATA_DIR, 'memory.json');
 
-// 1. Naya hCaptcha Task Receive Karna
-app.post('/api/new-hcaptcha', (req, res) => {
-const task = req.body;
+let db = { pending: {}, trained: {} };
 
-    // Agar task pehle se trained list mein nahi hai, tabhi pending mein dalo
-    if (!hcaptchaTrained[task.taskId]) {
-    // 🔥 JADU: Agar task pehle se trained list mein mojood hai, toh dobara pending mein mat dalo!
-    if (hcaptchaTrained[task.taskId]) {
-        return res.json({ success: true, status: 'already_trained' });
+if (fs.existsSync(MEMORY_FILE)) {
+    try {
+        db = JSON.parse(fs.readFileSync(MEMORY_FILE, 'utf8'));
+        console.log("🚀 Memory Loaded Safely from Volume!");
+    } catch (e) {
+        console.error("Error reading memory file. Starting fresh.", e);
     }
-    
-    if (!hcaptchaPending[task.taskId]) {
-hcaptchaPending[task.taskId] = {
-id: task.taskId,
-prompt: task.prompt,
-            media: task.media, // Is mein image ya video frames honge
-            media: task.media,
-timestamp: task.timestamp
-};
-console.log(`[New hCaptcha] ID: #${task.taskId} received!`);
-@@ -45,21 +47,20 @@ app.get('/api/check-hcaptcha/:id', (req, res) => {
 }
+
+function saveDatabase() {
+    try { fs.writeFileSync(MEMORY_FILE, JSON.stringify(db, null, 2)); } 
+    catch (e) { console.error("Error saving to memory file!", e); }
+}
+
+app.post('/api/new-hcaptcha', (req, res) => {
+    try {
+        const { taskId, prompt, media, timestamp } = req.body;
+        if (!taskId) return res.status(400).json({ error: "Task ID missing" });
+
+        if (!db.trained[taskId]) {
+            db.pending[taskId] = { id: taskId, prompt, media, timestamp: timestamp || new Date().toISOString() };
+        }
+        res.json({ success: true });
+    } catch (e) { res.status(500).json({ error: "Server Error" }); }
 });
 
-// 4. Dashboard se Training Data (Clicks/Coordinates) Save Karna
-// 4. Dashboard se Training Data Save Karna (Permanent Lock)
-app.post('/api/submit-hcaptcha', (req, res) => {
-const { taskId, clicks } = req.body;
+app.get('/api/get-hcaptcha', (req, res) => { res.json(db); });
 
-    if (hcaptchaPending[taskId] || !hcaptchaTrained[taskId]) {
-        hcaptchaTrained[taskId] = {
-            id: taskId,
-            clicks: clicks,
-            trainedAt: new Date().toISOString()
-        };
-        
-        // Pending se nikal do kyunke ab yeh train ho chuka hai
-        delete hcaptchaPending[taskId];
-        console.log(`[Trained] hCaptcha ID: #${taskId} saved with ${clicks.length} actions.`);
+app.get('/api/check-hcaptcha/:id', (req, res) => {
+    const taskId = req.params.id;
+    if (db.trained[taskId]) {
+        res.json({ success: true, data: { status: 'solved', clicks: db.trained[taskId].clicks } });
+    } else {
+        res.json({ success: true, data: { status: 'pending' } });
     }
-    hcaptchaTrained[taskId] = {
-        id: taskId,
-        clicks: clicks,
-        trainedAt: new Date().toISOString()
-    };
-    
-    // Pending se foran nikal do taake wapis na aaye
-    delete hcaptchaPending[taskId];
-    console.log(`[Permanently Trained] hCaptcha ID: #${taskId} saved safely.`);
-    
-res.json({ success: true });
 });
 
-@@ -72,8 +73,7 @@ app.delete('/api/delete-hcaptcha/:id', (req, res) => {
-res.json({ success: true });
+app.post('/api/submit-hcaptcha', (req, res) => {
+    try {
+        const { taskId, clicks, prompt } = req.body;
+        if (!taskId || !clicks) return res.status(400).json({ error: "Invalid data" });
+
+        db.trained[taskId] = { id: taskId, prompt, clicks, media: [], timestamp: new Date().toISOString() };
+        delete db.pending[taskId];
+        saveDatabase();
+
+        res.json({ success: true });
+    } catch (e) { res.status(500).json({ error: "Server Error" }); }
 });
 
-// Server Start
+app.delete('/api/delete-hcaptcha/:id', (req, res) => {
+    const taskId = req.params.id;
+    delete db.pending[taskId];
+    delete db.trained[taskId];
+    saveDatabase();
+    res.json({ success: true });
+});
+
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-console.log(`hCaptcha Master Server is running on port ${PORT} 🚀`);
-});
-});
+app.listen(PORT, () => { console.log(`🚀 hCaptcha Master Server running on port ${PORT}`); });
