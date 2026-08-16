@@ -7,15 +7,12 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '50mb' })); 
 
-// 🚀 THE VOLUME FIX: Ab data hamesha Railway ke /data volume mein save hoga!
-// (Agar aap kabhi apne PC par test karein toh yeh wahan bhi error nahi dega)
 const DATA_DIR = fs.existsSync('/data') ? '/data' : __dirname;
 const DB_FILE = path.join(DATA_DIR, 'database.json');
 
 let hcaptchaPending = {};
 let hcaptchaTrained = {};
 
-// Load data on startup
 if (fs.existsSync(DB_FILE)) {
     try {
         const data = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
@@ -27,24 +24,12 @@ if (fs.existsSync(DB_FILE)) {
     }
 }
 
-// Asynchronous Database Save
 function saveDatabase() {
     fs.writeFile(DB_FILE, JSON.stringify({ pending: hcaptchaPending, trained: hcaptchaTrained }), 'utf8', (err) => {
         if (err) console.error("[ERROR] Failed to save database:", err);
     });
 }
 
-function getSimilarity(str1, str2) {
-    if (!str1 || !str2) return 0;
-    let matches = 0;
-    const len = Math.min(str1.length, str2.length);
-    for (let i = 0; i < len; i++) {
-        if (str1[i] === str2[i]) matches++;
-    }
-    return (matches / Math.max(str1.length, str2.length)) * 100;
-}
-
-// 1. Naya hCaptcha Task Receive Karna
 app.post('/api/new-hcaptcha', (req, res) => {
     const task = req.body;
     
@@ -52,11 +37,9 @@ app.post('/api/new-hcaptcha', (req, res) => {
 
     let isAutoSolved = false;
 
-    // 🧠 AI ENGINE: Fast Searching
     for (const trainedId in hcaptchaTrained) {
         const trainedTask = hcaptchaTrained[trainedId];
         
-        // 🚀 Prompt Logic: URL hata kar sirf text match
         const oldPromptText = (trainedTask.prompt || "").split('|||')[0].trim();
         const newPromptText = (task.prompt || "").split('|||')[0].trim();
         
@@ -64,7 +47,7 @@ app.post('/api/new-hcaptcha', (req, res) => {
 
         const isGrid = task.media.length > 1 && task.media.every(m => m.type === 'image' || m.type === 'single_image');
         
-        // GRID SHUFFLE LOGIC
+        // 💡 GRID SHUFFLE LOGIC (Rabbits - Works Perfectly)
         if (isGrid && trainedTask.media.length === task.media.length) {
             let clickedHashes = trainedTask.clicks.map(index => trainedTask.media[index]?.stableHash).filter(Boolean);
             let newClicks = [];
@@ -85,16 +68,15 @@ app.post('/api/new-hcaptcha', (req, res) => {
                 break;
             }
         } 
-        // CANVAS FUZZY LOGIC
+        // 💡 CANVAS STRICT LOGIC (Tigers/Arrows - No More Ghost Clicks!)
         else if (!isGrid && task.media.length > 0 && trainedTask.media.length > 0) {
             let newHash = task.media[task.media.length - 1].stableHash; 
             let oldHash = trainedTask.media[trainedTask.media.length - 1].stableHash;
             
-            let similarity = getSimilarity(newHash, oldHash);
-            
-            // 🚀 Similarity 75% for jumping tigers & arrows
-            if (similarity >= 75) { 
-                console.log(`[AI SOLVED] Canvas Fuzzy Match (${similarity.toFixed(1)}%) for #${task.taskId}`);
+            // 🚀 THE FIX: Coordinate-based tasks MUST be 100% Exact Match. 
+            // Agar tiger hila hai, to new coordinates zaroori hain.
+            if (newHash === oldHash) { 
+                console.log(`[AI SOLVED] Canvas EXACT Match for #${task.taskId}`);
                 const lightweightMedia = task.media.map(m => ({ stableHash: m.stableHash, type: m.type }));
                 hcaptchaTrained[task.taskId] = { ...task, media: lightweightMedia, clicks: trainedTask.clicks, trainedAt: new Date().toISOString(), aiMatched: true };
                 isAutoSolved = true;
