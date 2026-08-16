@@ -7,7 +7,10 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '50mb' })); 
 
-const DB_FILE = path.join(__dirname, 'database.json');
+// 🚀 THE VOLUME FIX: Ab data hamesha Railway ke /data volume mein save hoga!
+// (Agar aap kabhi apne PC par test karein toh yeh wahan bhi error nahi dega)
+const DATA_DIR = fs.existsSync('/data') ? '/data' : __dirname;
+const DB_FILE = path.join(DATA_DIR, 'database.json');
 
 let hcaptchaPending = {};
 let hcaptchaTrained = {};
@@ -18,7 +21,7 @@ if (fs.existsSync(DB_FILE)) {
         const data = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
         hcaptchaPending = data.pending || {};
         hcaptchaTrained = data.trained || {};
-        console.log(`[DB Loaded] Trained: ${Object.keys(hcaptchaTrained).length}, Pending: ${Object.keys(hcaptchaPending).length}`);
+        console.log(`[DB Loaded from ${DATA_DIR}] Trained: ${Object.keys(hcaptchaTrained).length}, Pending: ${Object.keys(hcaptchaPending).length}`);
     } catch (e) {
         console.log("Database load error:", e);
     }
@@ -53,7 +56,7 @@ app.post('/api/new-hcaptcha', (req, res) => {
     for (const trainedId in hcaptchaTrained) {
         const trainedTask = hcaptchaTrained[trainedId];
         
-        // 🚀 BUG 1 FIX: Prompt se example image URL hata kar sirf text match karo!
+        // 🚀 Prompt Logic: URL hata kar sirf text match
         const oldPromptText = (trainedTask.prompt || "").split('|||')[0].trim();
         const newPromptText = (task.prompt || "").split('|||')[0].trim();
         
@@ -89,7 +92,7 @@ app.post('/api/new-hcaptcha', (req, res) => {
             
             let similarity = getSimilarity(newHash, oldHash);
             
-            // 🚀 BUG 2 FIX: 94% was too strict! Changed to 75% so jumping tigers & arrows get caught!
+            // 🚀 Similarity 75% for jumping tigers & arrows
             if (similarity >= 75) { 
                 console.log(`[AI SOLVED] Canvas Fuzzy Match (${similarity.toFixed(1)}%) for #${task.taskId}`);
                 const lightweightMedia = task.media.map(m => ({ stableHash: m.stableHash, type: m.type }));
@@ -163,5 +166,5 @@ app.delete('/api/delete-hcaptcha/:id', (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`hCaptcha AI Master Server is running FAST on port ${PORT} 🚀`);
+    console.log(`hCaptcha AI Master Server is running on port ${PORT} 🚀`);
 });
