@@ -5,7 +5,6 @@ const path = require('path');
 const app = express();
 
 app.use(cors());
-// 🚀 Limit can stay large for incoming tasks, but outgoing will be tiny!
 app.use(express.json({ limit: '50mb' })); 
 
 const DB_FILE = path.join(__dirname, 'database.json');
@@ -25,7 +24,7 @@ if (fs.existsSync(DB_FILE)) {
     }
 }
 
-// 🚀 SPEED FIX 1: Asynchronous Database Save (Server hang nahi hoga!)
+// Asynchronous Database Save
 function saveDatabase() {
     fs.writeFile(DB_FILE, JSON.stringify({ pending: hcaptchaPending, trained: hcaptchaTrained }), 'utf8', (err) => {
         if (err) console.error("[ERROR] Failed to save database:", err);
@@ -50,11 +49,15 @@ app.post('/api/new-hcaptcha', (req, res) => {
 
     let isAutoSolved = false;
 
-    // AI ENGINE: Fast Searching
+    // 🧠 AI ENGINE: Fast Searching
     for (const trainedId in hcaptchaTrained) {
         const trainedTask = hcaptchaTrained[trainedId];
         
-        if (!trainedTask.media || trainedTask.prompt !== task.prompt) continue;
+        // 🚀 BUG 1 FIX: Prompt se example image URL hata kar sirf text match karo!
+        const oldPromptText = (trainedTask.prompt || "").split('|||')[0].trim();
+        const newPromptText = (task.prompt || "").split('|||')[0].trim();
+        
+        if (!trainedTask.media || oldPromptText !== newPromptText) continue;
 
         const isGrid = task.media.length > 1 && task.media.every(m => m.type === 'image' || m.type === 'single_image');
         
@@ -73,8 +76,6 @@ app.post('/api/new-hcaptcha', (req, res) => {
 
             if (matchCount > 0 && matchCount === clickedHashes.length) {
                 console.log(`[AI SOLVED] Grid Shuffled Match found for #${task.taskId}`);
-                
-                // 🚀 SPEED FIX 2: Save Only Hashes in Trained Data, not Heavy Media
                 const lightweightMedia = task.media.map(m => ({ stableHash: m.stableHash, type: m.type }));
                 hcaptchaTrained[task.taskId] = { ...task, media: lightweightMedia, clicks: newClicks, trainedAt: new Date().toISOString(), aiMatched: true };
                 isAutoSolved = true;
@@ -85,12 +86,12 @@ app.post('/api/new-hcaptcha', (req, res) => {
         else if (!isGrid && task.media.length > 0 && trainedTask.media.length > 0) {
             let newHash = task.media[task.media.length - 1].stableHash; 
             let oldHash = trainedTask.media[trainedTask.media.length - 1].stableHash;
+            
             let similarity = getSimilarity(newHash, oldHash);
             
-            if (similarity >= 94) { 
+            // 🚀 BUG 2 FIX: 94% was too strict! Changed to 75% so jumping tigers & arrows get caught!
+            if (similarity >= 75) { 
                 console.log(`[AI SOLVED] Canvas Fuzzy Match (${similarity.toFixed(1)}%) for #${task.taskId}`);
-                
-                // 🚀 SPEED FIX 2: Save Only Hashes in Trained Data
                 const lightweightMedia = task.media.map(m => ({ stableHash: m.stableHash, type: m.type }));
                 hcaptchaTrained[task.taskId] = { ...task, media: lightweightMedia, clicks: trainedTask.clicks, trainedAt: new Date().toISOString(), aiMatched: true };
                 isAutoSolved = true;
@@ -103,7 +104,7 @@ app.post('/api/new-hcaptcha', (req, res) => {
         hcaptchaPending[task.taskId] = {
             id: task.taskId,
             prompt: task.prompt,
-            media: task.media, // Pending mein media zaroori hai taake dashboard par nazar aye
+            media: task.media, 
             timestamp: task.timestamp
         };
         console.log(`[New hCaptcha] ID: #${task.taskId} sent to Dashboard!`);
@@ -113,13 +114,10 @@ app.post('/api/new-hcaptcha', (req, res) => {
     res.json({ success: true });
 });
 
-// 2. Dashboard ke liye Tasks Bhejna
 app.get('/api/get-hcaptcha', (req, res) => {
-    // 🚀 SPEED FIX 3: Dashboard ko ab halka data mile ga
     res.json({ pending: hcaptchaPending, trained: hcaptchaTrained });
 });
 
-// 3. Extension ke liye Task Status Check Karna
 app.get('/api/check-hcaptcha/:id', (req, res) => {
     const taskId = req.params.id;
     if (hcaptchaTrained[taskId]) {
@@ -129,13 +127,10 @@ app.get('/api/check-hcaptcha/:id', (req, res) => {
     }
 });
 
-// 4. Dashboard se Training Data Save Karna (LIGHTWEIGHT FIX)
 app.post('/api/submit-hcaptcha', (req, res) => {
     const { taskId, clicks } = req.body;
     
     if (hcaptchaPending[taskId]) {
-        
-        // 🚀 THE ULTIMATE SPEED FIX: Extract only Hashes, delete heavy base64 images/videos!
         const lightweightMedia = hcaptchaPending[taskId].media.map(m => ({
             type: m.type,
             stableHash: m.stableHash,
@@ -145,7 +140,7 @@ app.post('/api/submit-hcaptcha', (req, res) => {
         hcaptchaTrained[taskId] = {
             id: taskId,
             prompt: hcaptchaPending[taskId].prompt, 
-            media: lightweightMedia, // Sirf Hashes! No heavy images.
+            media: lightweightMedia, 
             clicks: clicks,
             trainedAt: new Date().toISOString()
         };
@@ -157,7 +152,6 @@ app.post('/api/submit-hcaptcha', (req, res) => {
     res.json({ success: true });
 });
 
-// 5. Dashboard se Task Delete Karna
 app.delete('/api/delete-hcaptcha/:id', (req, res) => {
     const taskId = req.params.id;
     delete hcaptchaPending[taskId];
