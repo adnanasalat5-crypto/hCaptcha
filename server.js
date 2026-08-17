@@ -5,7 +5,8 @@ const path = require('path');
 const app = express();
 
 app.use(cors());
-app.use(express.json({ limit: '50mb' }));
+// 🚀 Limit 100mb taake heavy video tasks asani se handle hon
+app.use(express.json({ limit: '100mb' }));
 
 const DATA_DIR = fs.existsSync('/data') ? '/data' : __dirname;
 const DB_FILE = path.join(DATA_DIR, 'database.json');
@@ -13,16 +14,16 @@ const DB_FILE = path.join(DATA_DIR, 'database.json');
 let hcaptchaPending = {};
 let hcaptchaTrained = {};
 
+// 🚀 Start hote hi RAM clear karega taake server crash na ho
 if (fs.existsSync(DB_FILE)) {
     try {
         const data = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
-        hcaptchaPending = data.pending || {};
+        hcaptchaPending = {}; // Pending flush kar diya taake RAM saaf mile
         hcaptchaTrained = data.trained || {};
-        console.log(`[DB Loaded] Trained: ${Object.keys(hcaptchaTrained).length}, Pending: ${Object.keys(hcaptchaPending).length}`);
+        console.log(`[DB Loaded] Trained: ${Object.keys(hcaptchaTrained).length}, Pending Flushed for RAM Recovery!`);
     } catch (e) { console.log("Database load error:", e); }
 }
 
-// 🚀 ANTI-CORRUPTION: Debounced DB Saver for thousands of profiles
 let saveTimeout = null;
 function saveDatabase() {
     if (saveTimeout) clearTimeout(saveTimeout);
@@ -33,7 +34,6 @@ function saveDatabase() {
     }, 2000); 
 }
 
-// Hamming Distance for dHash Difference
 function getHammingDistance(s1, s2) {
     if (!s1 || !s2 || s1.length !== s2.length) return 999;
     let diff = 0;
@@ -41,7 +41,7 @@ function getHammingDistance(s1, s2) {
     return diff;
 }
 
-// 🚀 THE IMAGE BANK ENGINE (Difference + Target Matching)
+// 🚀 MATCHING ENGINE (100% same as before, no changes in logic)
 function tryAutoSolve(task) {
     if (hcaptchaTrained[task.taskId]) return { solved: true, clicks: hcaptchaTrained[task.taskId].clicks };
 
@@ -52,7 +52,6 @@ function tryAutoSolve(task) {
         let bankExact = new Set();
         let bankDhash = new Set();
 
-        // 1. Build Concept Bank for this Prompt
         for (const id in hcaptchaTrained) {
             let tr = hcaptchaTrained[id];
             if ((tr.prompt || "").split('|||')[0].trim().toLowerCase() === newPrompt && tr.media.length > 1) {
@@ -65,7 +64,6 @@ function tryAutoSolve(task) {
             }
         }
 
-        // 2. Match Target Images (Even if 2 out of 3 match)
         if (bankExact.size > 0 || bankDhash.size > 0) {
             let newClicks = [];
             for (let i = 0; i < task.media.length; i++) {
@@ -73,10 +71,10 @@ function tryAutoSolve(task) {
                 let matched = false;
                 
                 if (m.stableHash && bankExact.has(m.stableHash)) {
-                    matched = true; // Exact Color Hash Match
+                    matched = true; 
                 } else if (m.dhash) {
                     for (let td of bankDhash) {
-                        if (getHammingDistance(m.dhash, td) <= 5) { // 🚀 5-Pixel Difference Threshold
+                        if (getHammingDistance(m.dhash, td) <= 5) { 
                             matched = true; break;
                         }
                     }
@@ -84,22 +82,24 @@ function tryAutoSolve(task) {
                 if (matched) newClicks.push(i);
             }
 
-            // 🚀 NON-STOP SUBMIT: If any targets found, click & submit instantly!
             if (newClicks.length > 0) {
-                console.log(`[AI MATCH] Grid Concept found for #${task.taskId} -> Clicks: ${newClicks.length}`);
-                hcaptchaTrained[task.taskId] = { id: task.taskId, prompt: task.prompt, media: task.media, clicks: newClicks, trainedAt: new Date().toISOString(), aiMatched: true };
+                console.log(`[AI MATCH] Concept found for #${task.taskId} -> Clicks: ${newClicks.length}`);
+                
+                // Sirf hashes save honge, tasveer nahi taake RAM bache
+                let lightweightMedia = task.media.map(m => ({ stableHash: m.stableHash, dhash: m.dhash, type: m.type }));
+                hcaptchaTrained[task.taskId] = { id: task.taskId, prompt: task.prompt, media: lightweightMedia, clicks: newClicks, trainedAt: new Date().toISOString(), aiMatched: true };
                 return { solved: true, clicks: newClicks };
             }
         }
     } else if (task.media.length > 0) {
-        // Canvas (Tiger/Arrows) MUST be Exact Match to preserve valid coordinates
         for (const id in hcaptchaTrained) {
             let tr = hcaptchaTrained[id];
             if ((tr.prompt || "").split('|||')[0].trim().toLowerCase() === newPrompt && tr.media.length > 0) {
                 let nHash = task.media[task.media.length - 1].stableHash;
                 let tHash = tr.media[tr.media.length - 1].stableHash;
                 if (nHash && tHash && nHash === tHash) {
-                    hcaptchaTrained[task.taskId] = { id: task.taskId, prompt: task.prompt, media: task.media, clicks: tr.clicks, trainedAt: new Date().toISOString() };
+                    let lightweightMedia = task.media.map(m => ({ stableHash: m.stableHash, dhash: m.dhash, type: m.type }));
+                    hcaptchaTrained[task.taskId] = { id: task.taskId, prompt: task.prompt, media: lightweightMedia, clicks: tr.clicks, trainedAt: new Date().toISOString() };
                     return { solved: true, clicks: tr.clicks };
                 }
             }
@@ -116,6 +116,13 @@ app.post('/api/new-hcaptcha', (req, res) => {
     if (result.solved) {
         saveDatabase();
         return res.json({ success: true, autoSolved: true });
+    }
+
+    // 🚀 FIX: Limit ko 30 se barha kar 100 kar diya gaya hai!
+    const pendingKeys = Object.keys(hcaptchaPending);
+    if (pendingKeys.length >= 100) {
+        // Agar 100 se upar jaye to sab se purana task delete kar do
+        delete hcaptchaPending[pendingKeys[0]];
     }
 
     hcaptchaPending[task.taskId] = { id: task.taskId, prompt: task.prompt, media: task.media, timestamp: task.timestamp };
@@ -137,7 +144,16 @@ app.get('/api/get-hcaptcha', (req, res) => { res.json({ pending: hcaptchaPending
 app.post('/api/submit-hcaptcha', (req, res) => {
     const { taskId, clicks } = req.body;
     if (hcaptchaPending[taskId]) {
-        hcaptchaTrained[taskId] = { id: taskId, prompt: hcaptchaPending[taskId].prompt, media: hcaptchaPending[taskId].media, clicks: clicks, trainedAt: new Date().toISOString() };
+        
+        // 🚀 TRAINING DIET PLAN: Save karte waqt video/image ka wazan khatam kar dega
+        let lightweightMedia = hcaptchaPending[taskId].media.map(m => ({
+            type: m.type,
+            index: m.index,
+            stableHash: m.stableHash,
+            dhash: m.dhash
+        }));
+
+        hcaptchaTrained[taskId] = { id: taskId, prompt: hcaptchaPending[taskId].prompt, media: lightweightMedia, clicks: clicks, trainedAt: new Date().toISOString() };
         delete hcaptchaPending[taskId];
     } else if (hcaptchaTrained[taskId]) {
         hcaptchaTrained[taskId].clicks = clicks;
