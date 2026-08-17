@@ -5,7 +5,6 @@ const path = require('path');
 const app = express();
 
 app.use(cors());
-// 🚀 Limit 100mb taake heavy video tasks asani se handle hon
 app.use(express.json({ limit: '100mb' }));
 
 const DATA_DIR = fs.existsSync('/data') ? '/data' : __dirname;
@@ -14,13 +13,37 @@ const DB_FILE = path.join(DATA_DIR, 'database.json');
 let hcaptchaPending = {};
 let hcaptchaTrained = {};
 
-// 🚀 Start hote hi RAM clear karega taake server crash na ho
+// ==========================================
+// 🚀 THE PURIFIER: Database Optimizer (Start hote hi DB saaf karega)
+// ==========================================
 if (fs.existsSync(DB_FILE)) {
     try {
+        console.log("Loading and Purifying Database...");
         const data = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
-        hcaptchaPending = {}; // Pending flush kar diya taake RAM saaf mile
-        hcaptchaTrained = data.trained || {};
-        console.log(`[DB Loaded] Trained: ${Object.keys(hcaptchaTrained).length}, Pending Flushed for RAM Recovery!`);
+        hcaptchaPending = {}; // Pending hamesha zero se shuru
+
+        let loadedTrained = data.trained || {};
+        
+        // 🚀 Purane 1000+ tasks ka wazan khatam kar raha hai
+        for (let id in loadedTrained) {
+            if (loadedTrained[id].media) {
+                loadedTrained[id].media = loadedTrained[id].media.map(m => ({
+                    type: m.type,
+                    index: m.index,
+                    stableHash: m.stableHash,
+                    dhash: m.dhash
+                    // 'src' aur 'frames' ko hamesha ke liye delete kar diya
+                }));
+            }
+        }
+        
+        hcaptchaTrained = loadedTrained;
+        console.log(`[DB Loaded & Purified] Trained Tasks: ${Object.keys(hcaptchaTrained).length}`);
+        
+        // 🚀 Fauran choti aur slim file save kar do taake loading fast ho jaye
+        fs.writeFileSync(DB_FILE, JSON.stringify({ pending: hcaptchaPending, trained: hcaptchaTrained }), 'utf8');
+        console.log("[DB SUCCESS] Database shrunken and optimized to KBs!");
+        
     } catch (e) { console.log("Database load error:", e); }
 }
 
@@ -31,7 +54,7 @@ function saveDatabase() {
         fs.writeFile(DB_FILE, JSON.stringify({ pending: hcaptchaPending, trained: hcaptchaTrained }), 'utf8', (err) => {
             if (err) console.error("[ERROR] Failed to save database:", err);
         });
-    }, 2000); 
+    }, 1000); 
 }
 
 function getHammingDistance(s1, s2) {
@@ -41,7 +64,6 @@ function getHammingDistance(s1, s2) {
     return diff;
 }
 
-// 🚀 MATCHING ENGINE (100% same as before, no changes in logic)
 function tryAutoSolve(task) {
     if (hcaptchaTrained[task.taskId]) return { solved: true, clicks: hcaptchaTrained[task.taskId].clicks };
 
@@ -85,7 +107,6 @@ function tryAutoSolve(task) {
             if (newClicks.length > 0) {
                 console.log(`[AI MATCH] Concept found for #${task.taskId} -> Clicks: ${newClicks.length}`);
                 
-                // Sirf hashes save honge, tasveer nahi taake RAM bache
                 let lightweightMedia = task.media.map(m => ({ stableHash: m.stableHash, dhash: m.dhash, type: m.type }));
                 hcaptchaTrained[task.taskId] = { id: task.taskId, prompt: task.prompt, media: lightweightMedia, clicks: newClicks, trainedAt: new Date().toISOString(), aiMatched: true };
                 return { solved: true, clicks: newClicks };
@@ -118,10 +139,8 @@ app.post('/api/new-hcaptcha', (req, res) => {
         return res.json({ success: true, autoSolved: true });
     }
 
-    // 🚀 FIX: Limit ko 30 se barha kar 100 kar diya gaya hai!
     const pendingKeys = Object.keys(hcaptchaPending);
     if (pendingKeys.length >= 100) {
-        // Agar 100 se upar jaye to sab se purana task delete kar do
         delete hcaptchaPending[pendingKeys[0]];
     }
 
@@ -145,7 +164,6 @@ app.post('/api/submit-hcaptcha', (req, res) => {
     const { taskId, clicks } = req.body;
     if (hcaptchaPending[taskId]) {
         
-        // 🚀 TRAINING DIET PLAN: Save karte waqt video/image ka wazan khatam kar dega
         let lightweightMedia = hcaptchaPending[taskId].media.map(m => ({
             type: m.type,
             index: m.index,
