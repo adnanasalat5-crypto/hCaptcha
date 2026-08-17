@@ -5,7 +5,7 @@ const path = require('path');
 const app = express();
 
 app.use(cors());
-app.use(express.json({ limit: '100mb' }));
+app.use(express.json({ limit: '60mb' }));
 
 const DATA_DIR = fs.existsSync('/data') ? '/data' : __dirname;
 const DB_FILE = path.join(DATA_DIR, 'database.json');
@@ -13,100 +13,93 @@ const DB_FILE = path.join(DATA_DIR, 'database.json');
 let hcaptchaPending = {};
 let hcaptchaTrained = {};
 
-if (fs.existsSync(DB_FILE)) {
-    try {
-        console.log("Loading and Purifying Database...");
-        const data = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
-        hcaptchaPending = {}; 
-        let loadedTrained = data.trained || {};
-        for (let id in loadedTrained) {
-            if (loadedTrained[id].media) {
-                loadedTrained[id].media = loadedTrained[id].media.map(m => ({
-                    type: m.type, index: m.index, stableHash: m.stableHash, dhash: m.dhash
-                }));
-            }
+function initDB() {
+    if (fs.existsSync(DB_FILE)) {
+        try {
+            const data = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+            hcaptchaPending = {};
+            hcaptchaTrained = data.trained || {};
+            console.log(`[DB] Loaded ${Object.keys(hcaptchaTrained).length} trained memory hashes.`);
+        } catch (e) {
+            console.log("[DB] Init Error, creating fresh schema", e);
         }
-        hcaptchaTrained = loadedTrained;
-        fs.writeFileSync(DB_FILE, JSON.stringify({ pending: hcaptchaPending, trained: hcaptchaTrained }), 'utf8');
-    } catch (e) { console.log("Database load error:", e); }
+    }
 }
+initDB();
 
 let saveTimeout = null;
-function saveDatabase() {
+function persistDatabase() {
     if (saveTimeout) clearTimeout(saveTimeout);
     saveTimeout = setTimeout(() => {
-        fs.writeFile(DB_FILE, JSON.stringify({ pending: hcaptchaPending, trained: hcaptchaTrained }), 'utf8', (err) => {});
-    }, 1000); 
+        try {
+            fs.writeFileSync(DB_FILE, JSON.stringify({ pending: hcaptchaPending, trained: hcaptchaTrained }), 'utf8');
+        } catch(err) {
+            console.error("[DB Save Error]", err);
+        }
+    }, 1200);
 }
 
-function getHammingDistance(s1, s2) {
-    if (!s1 || !s2 || s1.length !== s2.length) return 999;
+function getHammingDistance(h1, h2) {
+    if (!h1 || !h2 || h1.length !== h2.length) return 999;
     let diff = 0;
-    for (let i = 0; i < s1.length; i++) if (s1[i] !== s2[i]) diff++;
+    for (let i = 0; i < h1.length; i++) {
+        if (h1[i] !== h2[i]) diff++;
+    }
     return diff;
 }
 
-function tryAutoSolve(task) {
-    if (hcaptchaTrained[task.taskId]) return { solved: true, clicks: hcaptchaTrained[task.taskId].clicks || [] };
+function evaluateAutoSolve(task) {
+    if (hcaptchaTrained[task.taskId]) {
+        return { solved: true, clicks: hcaptchaTrained[task.taskId].clicks || [] };
+    }
 
-    // 🚀 THE FIX: Pehle hum string ko split karke reference image URL ignore kar dete the. 
-    // Ab hum pura string match karenge taake Dog aur Rabbit alag alag count hon!
-    let newPrompt = (task.prompt || "").trim().toLowerCase();
-    
+    let targetPrompt = (task.prompt || "").trim().toLowerCase();
     let isGrid = task.media && task.media.length > 1;
 
     if (isGrid) {
-        let bankExact = new Set();
-        let bankDhash = new Set();
+        let validDhashes = new Set();
 
         for (const id in hcaptchaTrained) {
             let tr = hcaptchaTrained[id];
-            let trainedPrompt = (tr.prompt || "").trim().toLowerCase();
-            
-            // 🚀 THE FIX: Exact Prompt (Text + Image URL) Match check
-            if (trainedPrompt === newPrompt && tr.media.length > 1) {
+            if ((tr.prompt || "").trim().toLowerCase() === targetPrompt) {
                 (tr.clicks || []).forEach(idx => {
-                    if (tr.media[idx]) {
-                        if (tr.media[idx].stableHash) bankExact.add(tr.media[idx].stableHash);
-                        if (tr.media[idx].dhash) bankDhash.add(tr.media[idx].dhash);
+                    if (tr.media && tr.media[idx] && tr.media[idx].dhash) {
+                        validDhashes.add(tr.media[idx].dhash);
                     }
                 });
             }
         }
 
-        if (bankExact.size > 0 || bankDhash.size > 0) {
-            let newClicks = [];
-            for (let i = 0; i < task.media.length; i++) {
-                let m = task.media[i];
-                let matched = false;
-                
-                if (m.stableHash && bankExact.has(m.stableHash)) matched = true; 
-                else if (m.dhash) {
-                    for (let td of bankDhash) {
-                        if (getHammingDistance(m.dhash, td) <= 5) { matched = true; break; }
+        if (validDhashes.size > 0) {
+            let matchedClicks = [];
+            task.media.forEach((item, idx) => {
+                if (!item.dhash || item.dhash === "0000000000000000") return;
+                for (let trainedHash of validDhashes) {
+                    if (getHammingDistance(item.dhash, trainedHash) <= 4) {
+                        matchedClicks.push(idx);
+                        break;
                     }
                 }
-                if (matched) newClicks.push(i);
-            }
+            });
 
-            if (newClicks.length > 0) {
-                let lightweightMedia = task.media.map(m => ({ stableHash: m.stableHash, dhash: m.dhash, type: m.type }));
-                hcaptchaTrained[task.taskId] = { id: task.taskId, prompt: task.prompt, media: lightweightMedia, clicks: newClicks, trainedAt: new Date().toISOString(), aiMatched: true };
-                return { solved: true, clicks: newClicks };
+            if (matchedClicks.length > 0) {
+                let lightMedia = task.media.map(m => ({ dhash: m.dhash, type: m.type, index: m.index }));
+                hcaptchaTrained[task.taskId] = {
+                    id: task.taskId,
+                    prompt: task.prompt,
+                    media: lightMedia,
+                    clicks: matchedClicks,
+                    trainedAt: new Date().toISOString()
+                };
+                return { solved: true, clicks: matchedClicks };
             }
         }
-    } else if (task.media.length > 0) {
+    } else if (task.media && task.media.length === 1) {
+        let singleTarget = task.media[0];
         for (const id in hcaptchaTrained) {
             let tr = hcaptchaTrained[id];
-            let trainedPrompt = (tr.prompt || "").trim().toLowerCase();
-            
-            // 🚀 THE FIX: Exact Prompt Match
-            if (trainedPrompt === newPrompt && tr.media.length > 0) {
-                let nHash = task.media[task.media.length - 1].stableHash;
-                let tHash = tr.media[tr.media.length - 1].stableHash;
-                if (nHash && tHash && nHash === tHash) {
-                    let lightweightMedia = task.media.map(m => ({ stableHash: m.stableHash, dhash: m.dhash, type: m.type }));
-                    hcaptchaTrained[task.taskId] = { id: task.taskId, prompt: task.prompt, media: lightweightMedia, clicks: tr.clicks || [], trainedAt: new Date().toISOString() };
+            if ((tr.prompt || "").trim().toLowerCase() === targetPrompt && tr.media && tr.media.length === 1) {
+                if (getHammingDistance(singleTarget.dhash, tr.media[0].dhash) <= 3) {
                     return { solved: true, clicks: tr.clicks || [] };
                 }
             }
@@ -119,50 +112,68 @@ app.post('/api/new-hcaptcha', (req, res) => {
     const task = req.body;
     if (!task || !task.taskId) return res.json({ success: false });
 
-    let result = tryAutoSolve(task);
-    if (result.solved) {
-        saveDatabase();
+    let autoRes = evaluateAutoSolve(task);
+    if (autoRes.solved) {
+        persistDatabase();
         return res.json({ success: true, autoSolved: true });
     }
 
-    const pendingKeys = Object.keys(hcaptchaPending);
-    if (pendingKeys.length >= 100) { delete hcaptchaPending[pendingKeys[0]]; }
+    const keys = Object.keys(hcaptchaPending);
+    if (keys.length > 80) delete hcaptchaPending[keys[0]];
 
-    hcaptchaPending[task.taskId] = { id: task.taskId, prompt: task.prompt, media: task.media, timestamp: task.timestamp };
-    saveDatabase();
+    hcaptchaPending[task.taskId] = {
+        id: task.taskId,
+        prompt: task.prompt,
+        refHash: task.refHash,
+        media: task.media,
+        timestamp: task.timestamp
+    };
+    persistDatabase();
     res.json({ success: true, autoSolved: false });
 });
 
 app.get('/api/check-hcaptcha/:id', (req, res) => {
-    const taskId = req.params.id;
-    if (hcaptchaTrained[taskId]) res.json({ status: 'solved', clicks: hcaptchaTrained[taskId].clicks || [] });
-    else res.json({ status: 'pending' });
+    const tid = req.params.id;
+    if (hcaptchaTrained[tid]) {
+        res.json({ status: 'solved', clicks: hcaptchaTrained[tid].clicks || [] });
+    } else {
+        res.json({ status: 'pending' });
+    }
 });
 
-app.get('/api/get-hcaptcha', (req, res) => { res.json({ pending: hcaptchaPending, trained: hcaptchaTrained }); });
+app.get('/api/get-hcaptcha', (req, res) => {
+    res.json({ pending: hcaptchaPending, trained: hcaptchaTrained });
+});
 
 app.post('/api/submit-hcaptcha', (req, res) => {
     const { taskId, clicks } = req.body;
-    if (hcaptchaPending[taskId]) {
-        let lightweightMedia = hcaptchaPending[taskId].media.map(m => ({
-            type: m.type, index: m.index, stableHash: m.stableHash, dhash: m.dhash
+    let source = hcaptchaPending[taskId] || hcaptchaTrained[taskId];
+    if (source) {
+        let lightMedia = (source.media || []).map(m => ({
+            dhash: m.dhash,
+            stableHash: m.stableHash,
+            type: m.type,
+            index: m.index
         }));
-        hcaptchaTrained[taskId] = { id: taskId, prompt: hcaptchaPending[taskId].prompt, media: lightweightMedia, clicks: clicks, trainedAt: new Date().toISOString() };
+        hcaptchaTrained[taskId] = {
+            id: taskId,
+            prompt: source.prompt,
+            media: lightMedia,
+            clicks: clicks || [],
+            trainedAt: new Date().toISOString()
+        };
         delete hcaptchaPending[taskId];
-    } else if (hcaptchaTrained[taskId]) {
-        hcaptchaTrained[taskId].clicks = clicks;
-        hcaptchaTrained[taskId].trainedAt = new Date().toISOString();
+        persistDatabase();
     }
-    saveDatabase();
     res.json({ success: true });
 });
 
 app.delete('/api/delete-hcaptcha/:id', (req, res) => {
     delete hcaptchaPending[req.params.id];
     delete hcaptchaTrained[req.params.id];
-    saveDatabase();
+    persistDatabase();
     res.json({ success: true });
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => { console.log(`hCaptcha Hybrid AI Server running on port ${PORT} 🚀`); });
+app.listen(PORT, () => console.log(`🚀 Master Engine Online on Port ${PORT}`));
