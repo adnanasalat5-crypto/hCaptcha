@@ -12,6 +12,8 @@ const DB_FILE = path.join(DATA_DIR, 'database.json');
 
 let hcaptchaPending = {};
 let hcaptchaTrained = {};
+// 🎯 Concept Image Bank: { [conceptKey]: Set of valid image dHashes }
+let conceptBank = {};
 
 function initDB() {
     if (fs.existsSync(DB_FILE)) {
@@ -19,9 +21,22 @@ function initDB() {
             const data = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
             hcaptchaPending = {};
             hcaptchaTrained = data.trained || {};
-            console.log(`[DB] Loaded ${Object.keys(hcaptchaTrained).length} trained memory hashes.`);
+            
+            // میموری سے تمام ٹرینڈ امیجز کا بینک ری بلڈ کریں
+            for (let id in hcaptchaTrained) {
+                let tr = hcaptchaTrained[id];
+                let cKey = tr.refHash || tr.prompt || "default";
+                if (!conceptBank[cKey]) conceptBank[cKey] = new Set();
+                
+                (tr.clicks || []).forEach(idx => {
+                    if (tr.media && tr.media[idx] && tr.media[idx].dhash) {
+                        conceptBank[cKey].add(tr.media[idx].dhash);
+                    }
+                });
+            }
+            console.log(`[DB] Engine Ready. Loaded ${Object.keys(hcaptchaTrained).length} tasks.`);
         } catch (e) {
-            console.log("[DB] Init Error, creating fresh schema", e);
+            console.log("[DB] Error loading database", e);
         }
     }
 }
@@ -33,10 +48,8 @@ function persistDatabase() {
     saveTimeout = setTimeout(() => {
         try {
             fs.writeFileSync(DB_FILE, JSON.stringify({ pending: hcaptchaPending, trained: hcaptchaTrained }), 'utf8');
-        } catch(err) {
-            console.error("[DB Save Error]", err);
-        }
-    }, 1200);
+        } catch(err) {}
+    }, 1000);
 }
 
 function getHammingDistance(h1, h2) {
@@ -48,61 +61,42 @@ function getHammingDistance(h1, h2) {
     return diff;
 }
 
+// 🎯 کسی بھی کالم/پوزیشن پر موجود امیج کو پہچاننا
 function evaluateAutoSolve(task) {
     if (hcaptchaTrained[task.taskId]) {
         return { solved: true, clicks: hcaptchaTrained[task.taskId].clicks || [] };
     }
 
-    let targetPrompt = (task.prompt || "").trim().toLowerCase();
-    let isGrid = task.media && task.media.length > 1;
+    let cKey = task.refHash || task.prompt || "default";
+    let targetDhashes = conceptBank[cKey];
 
-    if (isGrid) {
-        let validDhashes = new Set();
+    if (targetDhashes && targetDhashes.size > 0 && task.media && task.media.length > 1) {
+        let matchedClicks = [];
 
-        for (const id in hcaptchaTrained) {
-            let tr = hcaptchaTrained[id];
-            if ((tr.prompt || "").trim().toLowerCase() === targetPrompt) {
-                (tr.clicks || []).forEach(idx => {
-                    if (tr.media && tr.media[idx] && tr.media[idx].dhash) {
-                        validDhashes.add(tr.media[idx].dhash);
-                    }
-                });
-            }
-        }
+        task.media.forEach((item, idx) => {
+            if (!item.dhash || item.dhash === "0000000000000000") return;
 
-        if (validDhashes.size > 0) {
-            let matchedClicks = [];
-            task.media.forEach((item, idx) => {
-                if (!item.dhash || item.dhash === "0000000000000000") return;
-                for (let trainedHash of validDhashes) {
-                    if (getHammingDistance(item.dhash, trainedHash) <= 4) {
-                        matchedClicks.push(idx);
-                        break;
-                    }
-                }
-            });
-
-            if (matchedClicks.length > 0) {
-                let lightMedia = task.media.map(m => ({ dhash: m.dhash, type: m.type, index: m.index }));
-                hcaptchaTrained[task.taskId] = {
-                    id: task.taskId,
-                    prompt: task.prompt,
-                    media: lightMedia,
-                    clicks: matchedClicks,
-                    trainedAt: new Date().toISOString()
-                };
-                return { solved: true, clicks: matchedClicks };
-            }
-        }
-    } else if (task.media && task.media.length === 1) {
-        let singleTarget = task.media[0];
-        for (const id in hcaptchaTrained) {
-            let tr = hcaptchaTrained[id];
-            if ((tr.prompt || "").trim().toLowerCase() === targetPrompt && tr.media && tr.media.length === 1) {
-                if (getHammingDistance(singleTarget.dhash, tr.media[0].dhash) <= 3) {
-                    return { solved: true, clicks: tr.clicks || [] };
+            // بینک میں موجود ہر محفوظ شدہ خرگوش کے ساتھ موازنہ
+            for (let savedHash of targetDhashes) {
+                if (getHammingDistance(item.dhash, savedHash) <= 6) { // 6 تک کا فرق ایکسیپٹ ہوگا
+                    matchedClicks.push(idx);
+                    break;
                 }
             }
+        });
+
+        // اگر کم از کم 1 یا زیادہ مطلوبہ تصویریں مل جائیں
+        if (matchedClicks.length > 0) {
+            let lightMedia = task.media.map(m => ({ dhash: m.dhash, type: m.type, index: m.index }));
+            hcaptchaTrained[task.taskId] = {
+                id: task.taskId,
+                prompt: task.prompt,
+                refHash: task.refHash,
+                media: lightMedia,
+                clicks: matchedClicks,
+                trainedAt: new Date().toISOString()
+            };
+            return { solved: true, clicks: matchedClicks };
         }
     }
     return { solved: false };
@@ -119,7 +113,7 @@ app.post('/api/new-hcaptcha', (req, res) => {
     }
 
     const keys = Object.keys(hcaptchaPending);
-    if (keys.length > 80) delete hcaptchaPending[keys[0]];
+    if (keys.length > 60) delete hcaptchaPending[keys[0]];
 
     hcaptchaPending[task.taskId] = {
         id: task.taskId,
@@ -148,6 +142,7 @@ app.get('/api/get-hcaptcha', (req, res) => {
 app.post('/api/submit-hcaptcha', (req, res) => {
     const { taskId, clicks } = req.body;
     let source = hcaptchaPending[taskId] || hcaptchaTrained[taskId];
+    
     if (source) {
         let lightMedia = (source.media || []).map(m => ({
             dhash: m.dhash,
@@ -155,13 +150,26 @@ app.post('/api/submit-hcaptcha', (req, res) => {
             type: m.type,
             index: m.index
         }));
+
+        let cKey = source.refHash || source.prompt || "default";
+        if (!conceptBank[cKey]) conceptBank[cKey] = new Set();
+
+        // بینک میں کلک شدہ امیجز شامل کریں
+        (clicks || []).forEach(idx => {
+            if (lightMedia[idx] && lightMedia[idx].dhash) {
+                conceptBank[cKey].add(lightMedia[idx].dhash);
+            }
+        });
+
         hcaptchaTrained[taskId] = {
             id: taskId,
             prompt: source.prompt,
+            refHash: source.refHash,
             media: lightMedia,
             clicks: clicks || [],
             trainedAt: new Date().toISOString()
         };
+
         delete hcaptchaPending[taskId];
         persistDatabase();
     }
@@ -176,4 +184,4 @@ app.delete('/api/delete-hcaptcha/:id', (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Master Engine Online on Port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Concept Bank Engine Active on Port ${PORT}`));
