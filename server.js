@@ -12,8 +12,30 @@ const DB_FILE = path.join(DATA_DIR, 'database.json');
 
 let hcaptchaPending = {};
 let hcaptchaTrained = {};
+
 // 🎯 Concept Image Bank: { [conceptKey]: Set of valid image dHashes }
 let conceptBank = {};
+
+function getCleanKey(task) {
+    let p = (task.prompt || "").trim().toLowerCase();
+    let r = (task.refHash && task.refHash !== "0000000000000000") ? task.refHash : "";
+    return r ? `REF_${r}` : `TXT_${p}`;
+}
+
+function rebuildConceptBank() {
+    conceptBank = {};
+    for (let id in hcaptchaTrained) {
+        let tr = hcaptchaTrained[id];
+        let cKey = getCleanKey(tr);
+        if (!conceptBank[cKey]) conceptBank[cKey] = new Set();
+        
+        (tr.clicks || []).forEach(idx => {
+            if (tr.media && tr.media[idx] && tr.media[idx].dhash && tr.media[idx].dhash !== "0000000000000000") {
+                conceptBank[cKey].add(tr.media[idx].dhash);
+            }
+        });
+    }
+}
 
 function initDB() {
     if (fs.existsSync(DB_FILE)) {
@@ -21,20 +43,8 @@ function initDB() {
             const data = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
             hcaptchaPending = {};
             hcaptchaTrained = data.trained || {};
-            
-            // میموری سے تمام ٹرینڈ امیجز کا بینک ری بلڈ کریں
-            for (let id in hcaptchaTrained) {
-                let tr = hcaptchaTrained[id];
-                let cKey = tr.refHash || tr.prompt || "default";
-                if (!conceptBank[cKey]) conceptBank[cKey] = new Set();
-                
-                (tr.clicks || []).forEach(idx => {
-                    if (tr.media && tr.media[idx] && tr.media[idx].dhash) {
-                        conceptBank[cKey].add(tr.media[idx].dhash);
-                    }
-                });
-            }
-            console.log(`[DB] Engine Ready. Loaded ${Object.keys(hcaptchaTrained).length} tasks.`);
+            rebuildConceptBank();
+            console.log(`[DB] Engine Loaded. Clean Concept Categories: ${Object.keys(conceptBank).length}`);
         } catch (e) {
             console.log("[DB] Error loading database", e);
         }
@@ -61,32 +71,33 @@ function getHammingDistance(h1, h2) {
     return diff;
 }
 
-// 🎯 کسی بھی کالم/پوزیشن پر موجود امیج کو پہچاننا
+// 🎯 سخت اور 100% ایکوریٹ فلٹرنگ (Strict Threshold = 3)
 function evaluateAutoSolve(task) {
     if (hcaptchaTrained[task.taskId]) {
         return { solved: true, clicks: hcaptchaTrained[task.taskId].clicks || [] };
     }
 
-    let cKey = task.refHash || task.prompt || "default";
+    let cKey = getCleanKey(task);
     let targetDhashes = conceptBank[cKey];
 
+    // اگر اس کیٹیگری کا ڈیٹا موجود ہو
     if (targetDhashes && targetDhashes.size > 0 && task.media && task.media.length > 1) {
         let matchedClicks = [];
 
         task.media.forEach((item, idx) => {
             if (!item.dhash || item.dhash === "0000000000000000") return;
 
-            // بینک میں موجود ہر محفوظ شدہ خرگوش کے ساتھ موازنہ
             for (let savedHash of targetDhashes) {
-                if (getHammingDistance(item.dhash, savedHash) <= 6) { // 6 تک کا فرق ایکسیپٹ ہوگا
+                // 🔒 غلط سلیکشن سے بچنے کے لیے ڈسٹنس کو سخت (Strict <= 3) کر دیا گیا ہے
+                if (getHammingDistance(item.dhash, savedHash) <= 3) {
                     matchedClicks.push(idx);
                     break;
                 }
             }
         });
 
-        // اگر کم از کم 1 یا زیادہ مطلوبہ تصویریں مل جائیں
-        if (matchedClicks.length > 0) {
+        // صرف تب کلک کرے گا جب کم از کم 1 اور زیادہ سے زیادہ 5 صحیح میچ ملیں
+        if (matchedClicks.length >= 1 && matchedClicks.length <= 5) {
             let lightMedia = task.media.map(m => ({ dhash: m.dhash, type: m.type, index: m.index }));
             hcaptchaTrained[task.taskId] = {
                 id: task.taskId,
@@ -151,12 +162,11 @@ app.post('/api/submit-hcaptcha', (req, res) => {
             index: m.index
         }));
 
-        let cKey = source.refHash || source.prompt || "default";
+        let cKey = getCleanKey(source);
         if (!conceptBank[cKey]) conceptBank[cKey] = new Set();
 
-        // بینک میں کلک شدہ امیجز شامل کریں
         (clicks || []).forEach(idx => {
-            if (lightMedia[idx] && lightMedia[idx].dhash) {
+            if (lightMedia[idx] && lightMedia[idx].dhash && lightMedia[idx].dhash !== "0000000000000000") {
                 conceptBank[cKey].add(lightMedia[idx].dhash);
             }
         });
@@ -179,9 +189,10 @@ app.post('/api/submit-hcaptcha', (req, res) => {
 app.delete('/api/delete-hcaptcha/:id', (req, res) => {
     delete hcaptchaPending[req.params.id];
     delete hcaptchaTrained[req.params.id];
+    rebuildConceptBank();
     persistDatabase();
     res.json({ success: true });
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Concept Bank Engine Active on Port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Strict Accuracy Engine Running on Port ${PORT}`));
