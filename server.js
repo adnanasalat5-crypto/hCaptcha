@@ -13,13 +13,11 @@ const DB_FILE = path.join(DATA_DIR, 'database.json');
 let hcaptchaPending = {};
 let hcaptchaTrained = {};
 
-// Database Optimizer (Purifier)
 if (fs.existsSync(DB_FILE)) {
     try {
         console.log("Loading and Purifying Database...");
         const data = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
         hcaptchaPending = {}; 
-
         let loadedTrained = data.trained || {};
         for (let id in loadedTrained) {
             if (loadedTrained[id].media) {
@@ -49,10 +47,12 @@ function getHammingDistance(s1, s2) {
 }
 
 function tryAutoSolve(task) {
-    // 🚀 Minor Bug Fix: undefined clicks crash guard
     if (hcaptchaTrained[task.taskId]) return { solved: true, clicks: hcaptchaTrained[task.taskId].clicks || [] };
 
-    let newPrompt = (task.prompt || "").split('|||')[0].trim().toLowerCase();
+    // 🚀 THE FIX: Pehle hum string ko split karke reference image URL ignore kar dete the. 
+    // Ab hum pura string match karenge taake Dog aur Rabbit alag alag count hon!
+    let newPrompt = (task.prompt || "").trim().toLowerCase();
+    
     let isGrid = task.media && task.media.length > 1;
 
     if (isGrid) {
@@ -61,7 +61,10 @@ function tryAutoSolve(task) {
 
         for (const id in hcaptchaTrained) {
             let tr = hcaptchaTrained[id];
-            if ((tr.prompt || "").split('|||')[0].trim().toLowerCase() === newPrompt && tr.media.length > 1) {
+            let trainedPrompt = (tr.prompt || "").trim().toLowerCase();
+            
+            // 🚀 THE FIX: Exact Prompt (Text + Image URL) Match check
+            if (trainedPrompt === newPrompt && tr.media.length > 1) {
                 (tr.clicks || []).forEach(idx => {
                     if (tr.media[idx]) {
                         if (tr.media[idx].stableHash) bankExact.add(tr.media[idx].stableHash);
@@ -95,7 +98,10 @@ function tryAutoSolve(task) {
     } else if (task.media.length > 0) {
         for (const id in hcaptchaTrained) {
             let tr = hcaptchaTrained[id];
-            if ((tr.prompt || "").split('|||')[0].trim().toLowerCase() === newPrompt && tr.media.length > 0) {
+            let trainedPrompt = (tr.prompt || "").trim().toLowerCase();
+            
+            // 🚀 THE FIX: Exact Prompt Match
+            if (trainedPrompt === newPrompt && tr.media.length > 0) {
                 let nHash = task.media[task.media.length - 1].stableHash;
                 let tHash = tr.media[tr.media.length - 1].stableHash;
                 if (nHash && tHash && nHash === tHash) {
@@ -138,7 +144,6 @@ app.get('/api/get-hcaptcha', (req, res) => { res.json({ pending: hcaptchaPending
 app.post('/api/submit-hcaptcha', (req, res) => {
     const { taskId, clicks } = req.body;
     if (hcaptchaPending[taskId]) {
-        // RAM Diet Plan
         let lightweightMedia = hcaptchaPending[taskId].media.map(m => ({
             type: m.type, index: m.index, stableHash: m.stableHash, dhash: m.dhash
         }));
