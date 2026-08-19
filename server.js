@@ -49,7 +49,6 @@ function initDB() {
 }
 initDB();
 
-// ✅ FIX: Task immediately save hoga taakay wapas pending mein na jaye
 function persistDatabase() {
     try {
         fs.writeFileSync(DB_FILE, JSON.stringify({ pending: hcaptchaPending, trained: hcaptchaTrained }), 'utf8');
@@ -58,12 +57,78 @@ function persistDatabase() {
     }
 }
 
+function getHammingDistance(h1, h2) {
+    if (!h1 || !h2 || h1.length !== h2.length) return 999;
+    let diff = 0;
+    for (let i = 0; i < h1.length; i++) {
+        if (h1[i] !== h2[i]) diff++;
+    }
+    return diff;
+}
+
+function evaluateAutoSolve(task) {
+    if (hcaptchaTrained[task.taskId]) {
+        return { solved: true, clicks: hcaptchaTrained[task.taskId].clicks || [] };
+    }
+
+    let cKey = getCleanKey(task);
+    
+    // 1. GRID TASKS (3x3 Images)
+    if (task.media && task.media.length > 1) {
+        let targetDhashes = conceptBank[cKey];
+        if (targetDhashes && targetDhashes.size > 0) {
+            let matchedClicks = [];
+            task.media.forEach((item, idx) => {
+                if (!item.dhash || item.dhash === "0000000000000000") return;
+                for (let savedHash of targetDhashes) {
+                    if (getHammingDistance(item.dhash, savedHash) <= 3) {
+                        matchedClicks.push(idx);
+                        break;
+                    }
+                }
+            });
+            if (matchedClicks.length >= 1 && matchedClicks.length <= 6) {
+                hcaptchaTrained[task.taskId] = {
+                    id: task.taskId, prompt: task.prompt, refHash: task.refHash,
+                    media: task.media.map(m => ({ dhash: m.dhash, type: m.type, index: m.index })),
+                    clicks: matchedClicks, trainedAt: new Date().toISOString()
+                };
+                return { solved: true, clicks: matchedClicks };
+            }
+        }
+    } 
+    // 2. VIDEO / SINGLE TASKS (Coordinates) - 98% MATCHING
+    else if (task.media && task.media.length === 1) {
+        let incomingHash = task.media[0].dhash;
+        if (incomingHash && incomingHash !== "0000000000000000") {
+            for (let tid in hcaptchaTrained) {
+                let tr = hcaptchaTrained[tid];
+                if (getCleanKey(tr) === cKey && tr.media && tr.media.length === 1) {
+                    let savedHash = tr.media[0].dhash;
+                    // Agar purani trained image se 98% match kar jaye
+                    if (getHammingDistance(incomingHash, savedHash) <= 3) {
+                        hcaptchaTrained[task.taskId] = {
+                            id: task.taskId, prompt: task.prompt, refHash: task.refHash,
+                            media: task.media.map(m => ({ dhash: m.dhash, type: m.type, index: m.index })),
+                            clicks: tr.clicks, trainedAt: new Date().toISOString()
+                        };
+                        return { solved: true, clicks: tr.clicks };
+                    }
+                }
+            }
+        }
+    }
+    return { solved: false };
+}
+
 app.post('/api/new-hcaptcha', (req, res) => {
     const task = req.body;
     if (!task || !task.taskId) return res.json({ success: false });
 
-    // ✅ Sirf exact matched tasks auto-solve honge, AI site pe ghalat click nahi marega
-    if (hcaptchaTrained[task.taskId]) {
+    // AI Check for 98% Exact Match
+    let autoResult = evaluateAutoSolve(task);
+    if (autoResult.solved) {
+        persistDatabase();
         return res.json({ success: true, autoSolved: true });
     }
 
