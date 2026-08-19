@@ -17,9 +17,9 @@ let hcaptchaTrained = {};
 let conceptBank = {};
 
 function getCleanKey(task) {
-    let p = (task.prompt || "").trim().toLowerCase();
-    let r = (task.refHash && task.refHash !== "0000000000000000") ? task.refHash : "";
-    return r ? `REF_${r}` : `TXT_${p}`;
+    // ✅ FIXED: sirf prompt text use karo — refHash animated hota hai, har baar badalta hai
+    let p = (task.prompt || "").split("|||")[0].trim().toLowerCase();
+    return "TXT_" + p;
 }
 
 function rebuildConceptBank() {
@@ -120,7 +120,8 @@ app.post('/api/new-hcaptcha', (req, res) => {
     let autoRes = evaluateAutoSolve(task);
     if (autoRes.solved) {
         persistDatabase();
-        return res.json({ success: true, autoSolved: true });
+        // ✅ FIXED: clicks seedha response mein bhejo — polling ka wait nahi
+        return res.json({ success: true, autoSolved: true, clicks: autoRes.clicks });
     }
 
     const keys = Object.keys(hcaptchaPending);
@@ -156,10 +157,11 @@ app.post('/api/submit-hcaptcha', (req, res) => {
     
     if (source) {
         let lightMedia = (source.media || []).map(m => ({
-            dhash: m.dhash,
-            stableHash: m.stableHash,
-            type: m.type,
-            index: m.index
+            dhash: m.dhash || "",
+            stableHash: m.stableHash || "",
+            type: m.type || "image",
+            index: m.index !== undefined ? m.index : 0,
+            thumb: m.thumb || ""
         }));
 
         let cKey = getCleanKey(source);
@@ -174,7 +176,7 @@ app.post('/api/submit-hcaptcha', (req, res) => {
         hcaptchaTrained[taskId] = {
             id: taskId,
             prompt: source.prompt,
-            refHash: source.refHash,
+            conceptKey: getCleanKey(source),
             media: lightMedia,
             clicks: clicks || [],
             trainedAt: new Date().toISOString()
