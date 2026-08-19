@@ -98,16 +98,7 @@ function evaluateAutoSolve(task) {
 
         // صرف تب کلک کرے گا جب کم از کم 1 اور زیادہ سے زیادہ 5 صحیح میچ ملیں
         if (matchedClicks.length >= 1 && matchedClicks.length <= 5) {
-            
-            // 🚀 FIX: Now we keep 'src' and 'frames' so images appear in Trained Tab
-            let lightMedia = task.media.map(m => ({ 
-                dhash: m.dhash, 
-                type: m.type, 
-                index: m.index,
-                src: m.src,         // Added back!
-                frames: m.frames    // Added back!
-            }));
-
+            let lightMedia = task.media.map(m => ({ dhash: m.dhash, type: m.type, index: m.index }));
             hcaptchaTrained[task.taskId] = {
                 id: task.taskId,
                 prompt: task.prompt,
@@ -116,11 +107,6 @@ function evaluateAutoSolve(task) {
                 clicks: matchedClicks,
                 trainedAt: new Date().toISOString()
             };
-
-            // ⚠️ SAFETY: Keep only the latest 200 trained tasks so server doesn't crash
-            const trainedKeys = Object.keys(hcaptchaTrained);
-            if (trainedKeys.length > 200) delete hcaptchaTrained[trainedKeys[0]];
-
             return { solved: true, clicks: matchedClicks };
         }
     }
@@ -169,14 +155,11 @@ app.post('/api/submit-hcaptcha', (req, res) => {
     let source = hcaptchaPending[taskId] || hcaptchaTrained[taskId];
     
     if (source) {
-        // 🚀 FIX: Now we keep 'src' and 'frames' so images appear in Trained Tab
         let lightMedia = (source.media || []).map(m => ({
             dhash: m.dhash,
             stableHash: m.stableHash,
             type: m.type,
-            index: m.index,
-            src: m.src,         // Added back!
-            frames: m.frames    // Added back!
+            index: m.index
         }));
 
         let cKey = getCleanKey(source);
@@ -196,10 +179,6 @@ app.post('/api/submit-hcaptcha', (req, res) => {
             clicks: clicks || [],
             trainedAt: new Date().toISOString()
         };
-
-        // ⚠️ SAFETY: Keep only the latest 200 trained tasks so server doesn't crash
-        const trainedKeys = Object.keys(hcaptchaTrained);
-        if (trainedKeys.length > 200) delete hcaptchaTrained[trainedKeys[0]];
 
         delete hcaptchaPending[taskId];
         persistDatabase();
