@@ -187,7 +187,7 @@ app.post('/api/submit-hcaptcha', (req, res) => {
 });
 
 // ✅ RESTORE: Trained → Pending wapas
-app.post("/api/restore-hcaptcha", (req, res) => {
+app.post('/api/restore-hcaptcha', (req, res) => {
     const { taskId } = req.body;
     if (hcaptchaTrained[taskId]) {
         hcaptchaPending[taskId] = {
@@ -198,7 +198,7 @@ app.post("/api/restore-hcaptcha", (req, res) => {
         delete hcaptchaTrained[taskId];
         rebuildConceptBank();
         persistDatabase();
-        console.log(`[RESTORE] Task #${taskId} wapas pending mein`);
+        console.log(`[RESTORE] #${taskId} wapas pending mein`);
     }
     res.json({ success: true });
 });
