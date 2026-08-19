@@ -141,7 +141,15 @@ app.post('/api/new-hcaptcha', (req, res) => {
 app.get('/api/check-hcaptcha/:id', (req, res) => {
     const tid = req.params.id;
     if (hcaptchaTrained[tid]) {
-        res.json({ status: 'solved', clicks: hcaptchaTrained[tid].clicks || [] });
+        let task = hcaptchaTrained[tid];
+        res.json({ 
+            status: 'solved', 
+            clicks: task.clicks || [],
+            // ✅ manualTrained: dashboard se manually save kiya tha
+            manualTrained: task.manualTrained || false,
+            // ✅ newTask: abhi pehli baar solve hua (auto-matched)
+            newTask: task.aiMatched || false
+        });
     } else {
         res.json({ status: 'pending' });
     }
@@ -179,7 +187,8 @@ app.post('/api/submit-hcaptcha', (req, res) => {
             conceptKey: getCleanKey(source),
             media: lightMedia,
             clicks: clicks || [],
-            trainedAt: new Date().toISOString()
+            trainedAt: new Date().toISOString(),
+            manualTrained: true  // ✅ Dashboard se manually save kiya
         };
 
         delete hcaptchaPending[taskId];
