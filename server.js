@@ -117,15 +117,14 @@ app.post('/api/new-hcaptcha', (req, res) => {
     const task = req.body;
     if (!task || !task.taskId) return res.json({ success: false });
 
-    let autoRes = evaluateAutoSolve(task);
-    if (autoRes.solved) {
-        persistDatabase();
-        // ✅ FIXED: clicks seedha response mein bhejo — polling ka wait nahi
-        return res.json({ success: true, autoSolved: true, clicks: autoRes.clicks });
+    // ✅ Pehle se trained task — seedha solve karo (polling se click hoga)
+    if (hcaptchaTrained[task.taskId]) {
+        return res.json({ success: true, autoSolved: true });
     }
 
+    // ✅ Naya task — pending mein daalo (dashboard mein aayega, AI train karega)
     const keys = Object.keys(hcaptchaPending);
-    if (keys.length > 60) delete hcaptchaPending[keys[0]];
+    if (keys.length >= 80) delete hcaptchaPending[keys[0]];
 
     hcaptchaPending[task.taskId] = {
         id: task.taskId,
@@ -134,22 +133,15 @@ app.post('/api/new-hcaptcha', (req, res) => {
         media: task.media,
         timestamp: task.timestamp
     };
-    persistDatabase();
+
     res.json({ success: true, autoSolved: false });
 });
 
 app.get('/api/check-hcaptcha/:id', (req, res) => {
     const tid = req.params.id;
+    // ✅ Trained task — seedha clicks do (extension site pe click karega)
     if (hcaptchaTrained[tid]) {
-        let task = hcaptchaTrained[tid];
-        res.json({ 
-            status: 'solved', 
-            clicks: task.clicks || [],
-            // ✅ manualTrained: dashboard se manually save kiya tha
-            manualTrained: task.manualTrained || false,
-            // ✅ newTask: abhi pehli baar solve hua (auto-matched)
-            newTask: task.aiMatched || false
-        });
+        res.json({ status: 'solved', clicks: hcaptchaTrained[tid].clicks || [] });
     } else {
         res.json({ status: 'pending' });
     }
@@ -187,8 +179,7 @@ app.post('/api/submit-hcaptcha', (req, res) => {
             conceptKey: getCleanKey(source),
             media: lightMedia,
             clicks: clicks || [],
-            trainedAt: new Date().toISOString(),
-            manualTrained: true  // ✅ Dashboard se manually save kiya
+            trainedAt: new Date().toISOString()
         };
 
         delete hcaptchaPending[taskId];
