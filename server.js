@@ -73,7 +73,7 @@ function evaluateAutoSolve(task) {
 
     let cKey = getCleanKey(task);
     
-    // 1. GRID TASKS (3x3 Images)
+    // 1. GRID TASKS (3x3 Images) - 98% Matching Allow Hai
     if (task.media && task.media.length > 1) {
         let targetDhashes = conceptBank[cKey];
         if (targetDhashes && targetDhashes.size > 0) {
@@ -97,7 +97,7 @@ function evaluateAutoSolve(task) {
             }
         }
     } 
-    // 2. VIDEO / SINGLE TASKS (Coordinates) - 98% MATCHING
+    // 2. VIDEO / DRAG & DROP TASKS - EXACT 100% MATCHING REQUIRED
     else if (task.media && task.media.length === 1) {
         let incomingHash = task.media[0].dhash;
         if (incomingHash && incomingHash !== "0000000000000000") {
@@ -105,8 +105,8 @@ function evaluateAutoSolve(task) {
                 let tr = hcaptchaTrained[tid];
                 if (getCleanKey(tr) === cKey && tr.media && tr.media.length === 1) {
                     let savedHash = tr.media[0].dhash;
-                    // Agar purani trained image se 98% match kar jaye
-                    if (getHammingDistance(incomingHash, savedHash) <= 3) {
+                    // ✅ FIX: Distance === 0 matlab agar object ek pixel bhi hila hua hai, to auto-solve nahi karega
+                    if (getHammingDistance(incomingHash, savedHash) === 0) {
                         hcaptchaTrained[task.taskId] = {
                             id: task.taskId, prompt: task.prompt, refHash: task.refHash,
                             media: task.media.map(m => ({ dhash: m.dhash, type: m.type, index: m.index })),
@@ -125,7 +125,6 @@ app.post('/api/new-hcaptcha', (req, res) => {
     const task = req.body;
     if (!task || !task.taskId) return res.json({ success: false });
 
-    // AI Check for 98% Exact Match
     let autoResult = evaluateAutoSolve(task);
     if (autoResult.solved) {
         persistDatabase();
