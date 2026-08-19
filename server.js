@@ -186,23 +186,6 @@ app.post('/api/submit-hcaptcha', (req, res) => {
     res.json({ success: true });
 });
 
-// ✅ RESTORE: Trained → Pending wapas
-app.post('/api/restore-hcaptcha', (req, res) => {
-    const { taskId } = req.body;
-    if (hcaptchaTrained[taskId]) {
-        hcaptchaPending[taskId] = {
-            ...hcaptchaTrained[taskId],
-            clicks: [],
-            restoredAt: new Date().toISOString()
-        };
-        delete hcaptchaTrained[taskId];
-        rebuildConceptBank();
-        persistDatabase();
-        console.log(`[RESTORE] #${taskId} wapas pending mein`);
-    }
-    res.json({ success: true });
-});
-
 app.delete('/api/delete-hcaptcha/:id', (req, res) => {
     delete hcaptchaPending[req.params.id];
     delete hcaptchaTrained[req.params.id];
