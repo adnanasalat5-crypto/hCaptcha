@@ -117,20 +117,12 @@ app.post('/api/new-hcaptcha', (req, res) => {
     const task = req.body;
     if (!task || !task.taskId) return res.json({ success: false });
 
-    // ✅ 1. Pehle se trained exact task
+    // ✅ Sirf wo task jo exact pehle train ho chuka ho
     if (hcaptchaTrained[task.taskId]) {
         return res.json({ success: true, autoSolved: true });
     }
 
-    // ✅ 2. MAIN FIX: Aap ka dHash Concept AI yahan activate karein!
-    let autoResult = evaluateAutoSolve(task);
-    if (autoResult.solved) {
-        // Agar AI ne patterns mila kar solve kar liya, to usko database me bhi save kar lein
-        persistDatabase();
-        return res.json({ success: true, autoSolved: true });
-    }
-
-    // ✅ 3. Naya task (Koi match nahi mila) — pending mein daalo
+    // Naya task pending mein bhej do Dashboard ke liye
     const keys = Object.keys(hcaptchaPending);
     if (keys.length >= 80) delete hcaptchaPending[keys[0]];
 
@@ -138,7 +130,7 @@ app.post('/api/new-hcaptcha', (req, res) => {
         id: task.taskId,
         prompt: task.prompt,
         refHash: task.refHash,
-        media: task.media, 
+        media: task.media,
         timestamp: task.timestamp
     };
 
