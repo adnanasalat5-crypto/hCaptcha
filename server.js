@@ -126,11 +126,12 @@ app.post('/api/new-hcaptcha', (req, res) => {
     const keys = Object.keys(hcaptchaPending);
     if (keys.length >= 80) delete hcaptchaPending[keys[0]];
 
+    // ✅ Thumb save karo — AI classify karne ke liye zaroori
     hcaptchaPending[task.taskId] = {
         id: task.taskId,
         prompt: task.prompt,
         refHash: task.refHash,
-        media: task.media,
+        media: task.media,  // thumb field bhi include hai
         timestamp: task.timestamp
     };
 
@@ -156,6 +157,7 @@ app.post('/api/submit-hcaptcha', (req, res) => {
     let source = hcaptchaPending[taskId] || hcaptchaTrained[taskId];
     
     if (source) {
+        // ✅ thumb rakho — dashboard retrain ke liye
         let lightMedia = (source.media || []).map(m => ({
             dhash: m.dhash || "",
             stableHash: m.stableHash || "",
