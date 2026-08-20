@@ -108,7 +108,7 @@ function persistDatabase() {
     if (saveTimeout) clearTimeout(saveTimeout);
     saveTimeout = setTimeout(() => {
         try {
-            fs.writeFileSync(DB_FILE, JSON.stringify({ pending: hcaptchaPending, trained: hcaptchaTrained }), 'utf8');
+            fs.writeFileSync(DB_FILE, JSON.stringify({ trained: hcaptchaTrained }), 'utf8');
         } catch(err) {
             // Fix #13: disk full / permission error — log karo silently ignore mat karo
             console.error('[DB] PERSIST ERROR:', err.message);
@@ -162,21 +162,22 @@ app.post('/api/new-hcaptcha', (req, res) => {
     const task = req.body;
     if (!task || !task.taskId) return res.json({ success: false, error: 'Missing taskId' });
 
-    if (hcaptchaTrained[task.taskId]) {
+    // ✅ evaluateAutoSolve — exact match + dhash concept matching dono
+    let autoRes = evaluateAutoSolve(task);
+    if (autoRes.solved) {
+        persistDatabase();
         return res.json({ success: true, autoSolved: true });
     }
 
-    // Fix #5: Pending limit — purana delete karo
+    // Pending limit
     const keys = Object.keys(hcaptchaPending);
     if (keys.length >= MAX_PENDING) {
-        // Sirf 1 nahi — 10 delete karo taake baar baar hit na ho
         keys.slice(0, 10).forEach(k => delete hcaptchaPending[k]);
     }
 
     hcaptchaPending[task.taskId] = {
         id: task.taskId,
         prompt: task.prompt,
-        refHash: task.refHash,
         media: task.media,
         timestamp: task.timestamp
     };
@@ -280,6 +281,11 @@ app.get('/api/health', (req, res) => {
         trained: Object.keys(hcaptchaTrained).length,
         concepts: Object.keys(conceptBank).length
     });
+});
+
+// ✅ Dashboard Railway pe serve karo
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'hcaptcha-dashboard.html'));
 });
 
 const PORT = process.env.PORT || 3000;
