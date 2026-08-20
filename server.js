@@ -12,9 +12,12 @@ const DB_FILE = path.join(DATA_DIR, 'database.json');
 
 let hcaptchaPending = {};
 let hcaptchaTrained = {};
+
+// 🎯 Concept Image Bank: { [conceptKey]: Set of valid image dHashes }
 let conceptBank = {};
 
 function getCleanKey(task) {
+    // ✅ FIXED: sirf prompt text use karo — refHash animated hota hai, har baar badalta hai
     let p = (task.prompt || "").split("|||")[0].trim().toLowerCase();
     return "TXT_" + p;
 }
@@ -49,12 +52,14 @@ function initDB() {
 }
 initDB();
 
+let saveTimeout = null;
 function persistDatabase() {
-    try {
-        fs.writeFileSync(DB_FILE, JSON.stringify({ pending: hcaptchaPending, trained: hcaptchaTrained }), 'utf8');
-    } catch(err) {
-        console.log("[DB] Error saving data", err);
-    }
+    if (saveTimeout) clearTimeout(saveTimeout);
+    saveTimeout = setTimeout(() => {
+        try {
+            fs.writeFileSync(DB_FILE, JSON.stringify({ pending: hcaptchaPending, trained: hcaptchaTrained }), 'utf8');
+        } catch(err) {}
+    }, 1000);
 }
 
 function getHammingDistance(h1, h2) {
@@ -66,56 +71,43 @@ function getHammingDistance(h1, h2) {
     return diff;
 }
 
+// 🎯 سخت اور 100% ایکوریٹ فلٹرنگ (Strict Threshold = 3)
 function evaluateAutoSolve(task) {
     if (hcaptchaTrained[task.taskId]) {
         return { solved: true, clicks: hcaptchaTrained[task.taskId].clicks || [] };
     }
 
     let cKey = getCleanKey(task);
-    
-    // 1. GRID TASKS (3x3 Images) - 98% Matching Allow Hai
-    if (task.media && task.media.length > 1) {
-        let targetDhashes = conceptBank[cKey];
-        if (targetDhashes && targetDhashes.size > 0) {
-            let matchedClicks = [];
-            task.media.forEach((item, idx) => {
-                if (!item.dhash || item.dhash === "0000000000000000") return;
-                for (let savedHash of targetDhashes) {
-                    if (getHammingDistance(item.dhash, savedHash) <= 3) {
-                        matchedClicks.push(idx);
-                        break;
-                    }
-                }
-            });
-            if (matchedClicks.length >= 1 && matchedClicks.length <= 6) {
-                hcaptchaTrained[task.taskId] = {
-                    id: task.taskId, prompt: task.prompt, refHash: task.refHash,
-                    media: task.media.map(m => ({ dhash: m.dhash, type: m.type, index: m.index })),
-                    clicks: matchedClicks, trainedAt: new Date().toISOString()
-                };
-                return { solved: true, clicks: matchedClicks };
-            }
-        }
-    } 
-    // 2. VIDEO / DRAG & DROP TASKS - EXACT 100% MATCHING REQUIRED
-    else if (task.media && task.media.length === 1) {
-        let incomingHash = task.media[0].dhash;
-        if (incomingHash && incomingHash !== "0000000000000000") {
-            for (let tid in hcaptchaTrained) {
-                let tr = hcaptchaTrained[tid];
-                if (getCleanKey(tr) === cKey && tr.media && tr.media.length === 1) {
-                    let savedHash = tr.media[0].dhash;
-                    // ✅ FIX: Distance === 0 matlab agar object ek pixel bhi hila hua hai, to auto-solve nahi karega
-                    if (getHammingDistance(incomingHash, savedHash) === 0) {
-                        hcaptchaTrained[task.taskId] = {
-                            id: task.taskId, prompt: task.prompt, refHash: task.refHash,
-                            media: task.media.map(m => ({ dhash: m.dhash, type: m.type, index: m.index })),
-                            clicks: tr.clicks, trainedAt: new Date().toISOString()
-                        };
-                        return { solved: true, clicks: tr.clicks };
-                    }
+    let targetDhashes = conceptBank[cKey];
+
+    // اگر اس کیٹیگری کا ڈیٹا موجود ہو
+    if (targetDhashes && targetDhashes.size > 0 && task.media && task.media.length > 1) {
+        let matchedClicks = [];
+
+        task.media.forEach((item, idx) => {
+            if (!item.dhash || item.dhash === "0000000000000000") return;
+
+            for (let savedHash of targetDhashes) {
+                // 🔒 غلط سلیکشن سے بچنے کے لیے ڈسٹنس کو سخت (Strict <= 3) کر دیا گیا ہے
+                if (getHammingDistance(item.dhash, savedHash) <= 3) {
+                    matchedClicks.push(idx);
+                    break;
                 }
             }
+        });
+
+        // صرف تب کلک کرے گا جب کم از کم 1 اور زیادہ سے زیادہ 5 صحیح میچ ملیں
+        if (matchedClicks.length >= 1 && matchedClicks.length <= 5) {
+            let lightMedia = task.media.map(m => ({ dhash: m.dhash, type: m.type, index: m.index }));
+            hcaptchaTrained[task.taskId] = {
+                id: task.taskId,
+                prompt: task.prompt,
+                refHash: task.refHash,
+                media: lightMedia,
+                clicks: matchedClicks,
+                trainedAt: new Date().toISOString()
+            };
+            return { solved: true, clicks: matchedClicks };
         }
     }
     return { solved: false };
@@ -125,12 +117,12 @@ app.post('/api/new-hcaptcha', (req, res) => {
     const task = req.body;
     if (!task || !task.taskId) return res.json({ success: false });
 
-    let autoResult = evaluateAutoSolve(task);
-    if (autoResult.solved) {
-        persistDatabase();
+    // ✅ Sirf wo task jo exact pehle train ho chuka ho
+    if (hcaptchaTrained[task.taskId]) {
         return res.json({ success: true, autoSolved: true });
     }
 
+    // Naya task pending mein bhej do Dashboard ke liye
     const keys = Object.keys(hcaptchaPending);
     if (keys.length >= 80) delete hcaptchaPending[keys[0]];
 
@@ -147,6 +139,7 @@ app.post('/api/new-hcaptcha', (req, res) => {
 
 app.get('/api/check-hcaptcha/:id', (req, res) => {
     const tid = req.params.id;
+    // ✅ Trained task — seedha clicks do (extension site pe click karega)
     if (hcaptchaTrained[tid]) {
         res.json({ status: 'solved', clicks: hcaptchaTrained[tid].clicks || [] });
     } else {
@@ -163,6 +156,7 @@ app.post('/api/submit-hcaptcha', (req, res) => {
     let source = hcaptchaPending[taskId] || hcaptchaTrained[taskId];
     
     if (source) {
+        // ✅ thumb rakho — dashboard retrain ke liye
         let lightMedia = (source.media || []).map(m => ({
             dhash: m.dhash || "",
             stableHash: m.stableHash || "",
@@ -195,6 +189,7 @@ app.post('/api/submit-hcaptcha', (req, res) => {
     res.json({ success: true });
 });
 
+// ✅ RESTORE: Trained → Pending wapas
 app.post('/api/restore-hcaptcha', (req, res) => {
     const { taskId } = req.body;
     if (hcaptchaTrained[taskId]) {
@@ -206,6 +201,7 @@ app.post('/api/restore-hcaptcha', (req, res) => {
         delete hcaptchaTrained[taskId];
         rebuildConceptBank();
         persistDatabase();
+        console.log(`[RESTORE] #${taskId} wapas pending mein`);
     }
     res.json({ success: true });
 });
